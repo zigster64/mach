@@ -37,19 +37,32 @@ pub const Options = struct {
     /// Only respected on Linux.
     linux_window_manager: LinuxWindowManager = .X11,
 
+    /// Whether or not to build and link against a shared library. This can help reduce link times.
+    ///
+    /// On by default in debug builds, off in release builds.
+    shared_library: ?bool = null,
+
     /// System SDK options.
     system_sdk: system_sdk.Options = .{},
+
+    /// Detects the default options to use.
+    pub fn detectDefaults(self: Options, is_release: bool) Options {
+        var options = self;
+        if (options.shared_library == null) options.shared_library = !is_release;
+        return options;
+    }
 };
 
 pub fn link(b: *Builder, step: *std.build.LibExeObjStep, options: Options) void {
-    const lib = buildLibrary(b, step, options);
+    const opt = options.detectDefaults(b.is_release);
+    const lib = buildLibrary(b, step, opt);
     step.linkLibrary(lib);
-    linkGLFWDependencies(b, step, options);
+    linkGLFWDependencies(b, step, opt);
 }
 
 fn buildLibrary(b: *Builder, step: *std.build.LibExeObjStep, options: Options) *std.build.LibExeObjStep {
     const main_abs = std.fs.path.join(b.allocator, &.{ thisDir(), "src/main.zig" }) catch unreachable;
-    const lib = b.addStaticLibrary("glfw", main_abs);
+    const lib = if (options.shared_library.?) b.addSharedLibrary("glfw", main_abs, .unversioned) else b.addStaticLibrary("glfw", main_abs);
     lib.setBuildMode(step.build_mode);
     lib.setTarget(step.target);
 

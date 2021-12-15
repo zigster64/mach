@@ -37,8 +37,15 @@ pub const Options = struct {
     /// When enabled, a debug build of the static library goes from ~947M to just ~53M.
     minimal_debug_symbols: bool = true,
 
+    /// Whether or not to build and link against a shared library. Because Dawn is a large library
+    /// (a full shader compiler, etc.) this reduces link times substantially (e.g. 8s -> 3s on
+    /// M1 macOS with code signing.)
+    ///
+    /// On by default in debug builds, off in release builds.
+    shared_library: ?bool = null,
+
     /// Detects the default options to use for the given target.
-    pub fn detectDefaults(self: Options, target: std.Target) Options {
+    pub fn detectDefaults(self: Options, target: std.Target, is_release: bool) Options {
         const tag = target.os.tag;
         const linux_desktop_like = isLinuxDesktopLike(target);
 
@@ -47,6 +54,7 @@ pub const Options = struct {
         if (options.d3d12 == null) options.d3d12 = tag == .windows;
         if (options.metal == null) options.metal = tag.isDarwin();
         if (options.vulkan == null) options.vulkan = tag == .fuchsia or linux_desktop_like;
+        if (options.shared_library == null) options.shared_library = !is_release;
 
         // TODO(build-system): respect these options / defaults
         if (options.desktop_gl == null) options.desktop_gl = linux_desktop_like; // TODO(build-system): add windows
@@ -64,33 +72,40 @@ pub const Options = struct {
 
 pub fn link(b: *Builder, step: *std.build.LibExeObjStep, options: Options) void {
     const target = (std.zig.system.NativeTargetInfo.detect(b.allocator, step.target) catch unreachable).target;
-    const opt = options.detectDefaults(target);
+    const opt = options.detectDefaults(target, b.is_release);
 
     const lib_mach_dawn_native = buildLibMachDawnNative(b, step, opt);
-    step.linkLibrary(lib_mach_dawn_native);
-
     const lib_dawn_common = buildLibDawnCommon(b, step, opt);
-    step.linkLibrary(lib_dawn_common);
-
     const lib_dawn_platform = buildLibDawnPlatform(b, step, opt);
-    step.linkLibrary(lib_dawn_platform);
-
-    // dawn-native
     const lib_abseil_cpp = buildLibAbseilCpp(b, step, opt);
-    step.linkLibrary(lib_abseil_cpp);
     const lib_dawn_native = buildLibDawnNative(b, step, opt);
-    step.linkLibrary(lib_dawn_native);
-
     const lib_dawn_wire = buildLibDawnWire(b, step, opt);
-    step.linkLibrary(lib_dawn_wire);
-
     const lib_dawn_utils = buildLibDawnUtils(b, step, opt);
-    step.linkLibrary(lib_dawn_utils);
-
     const lib_spirv_tools = buildLibSPIRVTools(b, step, opt);
-    step.linkLibrary(lib_spirv_tools);
-
     const lib_tint = buildLibTint(b, step, opt);
+
+    if (opt.shared_library.?) {
+        step.linkLibrary(lib_mach_dawn_native);
+
+        lib_mach_dawn_native.linkSystemLibrary("objc");
+        lib_mach_dawn_native.linkLibrary(lib_dawn_common);
+        lib_mach_dawn_native.linkLibrary(lib_dawn_platform);
+        lib_mach_dawn_native.linkLibrary(lib_abseil_cpp);
+        lib_mach_dawn_native.linkLibrary(lib_dawn_native);
+        lib_mach_dawn_native.linkLibrary(lib_dawn_wire);
+        lib_mach_dawn_native.linkLibrary(lib_dawn_utils);
+        lib_mach_dawn_native.linkLibrary(lib_spirv_tools);
+        lib_mach_dawn_native.linkLibrary(lib_tint);
+        return;
+    }
+    step.linkLibrary(lib_mach_dawn_native);
+    step.linkLibrary(lib_dawn_common);
+    step.linkLibrary(lib_dawn_platform);
+    step.linkLibrary(lib_abseil_cpp);
+    step.linkLibrary(lib_dawn_native);
+    step.linkLibrary(lib_dawn_wire);
+    step.linkLibrary(lib_dawn_utils);
+    step.linkLibrary(lib_spirv_tools);
     step.linkLibrary(lib_tint);
 }
 
@@ -101,7 +116,7 @@ fn isLinuxDesktopLike(target: std.Target) bool {
 
 fn buildLibMachDawnNative(b: *Builder, step: *std.build.LibExeObjStep, options: Options) *std.build.LibExeObjStep {
     var main_abs = std.fs.path.join(b.allocator, &.{ thisDir(), "src/dawn/dummy.zig" }) catch unreachable;
-    const lib = b.addStaticLibrary("dawn-native-mach", main_abs);
+    const lib = if (options.shared_library.?) b.addSharedLibrary("dawn-native-mach", main_abs, .unversioned) else b.addStaticLibrary("dawn-native-mach", main_abs);
     lib.install();
     lib.setBuildMode(step.build_mode);
     lib.setTarget(step.target);
@@ -158,6 +173,7 @@ fn buildLibDawnCommon(b: *Builder, step: *std.build.LibExeObjStep, options: Opti
         // TODO(build-system): pass system SDK options through
         system_sdk.include(b, lib, .{});
         lib.linkFramework("Foundation");
+        lib.linkSystemLibrary("objc");
         var abs_path = std.fs.path.join(b.allocator, &.{ thisDir(), "libs/dawn/src/common/SystemUtils_mac.mm" }) catch unreachable;
         sources.append(abs_path) catch unreachable;
     }
