@@ -64,6 +64,8 @@ fn buildLibrary(b: *Builder, step: *std.build.LibExeObjStep, options: Options) *
             thisDir() ++ "/src/sources_macos.c",
         }, &.{ "-D_GLFW_COCOA", include_glfw_src }),
         else => {
+            // Is unix-like
+
             // TODO(future): for now, Linux must be built with glibc, not musl:
             //
             // ```
@@ -78,7 +80,11 @@ fn buildLibrary(b: *Builder, step: *std.build.LibExeObjStep, options: Options) *
                 .X11 => "-D_GLFW_X11",
                 .Wayland => "-D_GLFW_WAYLAND",
             };
-            sources.append(thisDir() ++ "/src/sources_linux.c") catch unreachable;
+            if (target.os.tag == .freebsd) {
+                sources.append(thisDir() ++ "/src/sources_freebsd.c") catch unreachable;
+            } else {
+                sources.append(thisDir() ++ "/src/sources_linux.c") catch unreachable;
+            }
             switch (options.linux_window_manager) {
                 .X11 => sources.append(thisDir() ++ "/src/sources_linux_x11.c") catch unreachable,
                 .Wayland => sources.append(thisDir() ++ "/src/sources_linux_wayland.c") catch unreachable,
